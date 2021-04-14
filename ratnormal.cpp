@@ -21,9 +21,9 @@ Ss{EXAMPLES}
     $ echo '2/3/(x + 2*y^2)^2 - 1/(x + 6*x*y^2)' | ratnormal -
     (
      1/3 *
-     (-3*x^2+2*x-12*y^4) *
      1/(6*x*y^2+x) *
-     1/(x+2*y^2)^2
+     1/(x+2*y^2)^2 *
+     (-3*x^2+2*x-12*y^4)
     )
 
 Ss{OPTIONS}
@@ -334,10 +334,49 @@ rat_swapoff_fmpz_factor(rat_t rat, ulong i)
     rat->num--;
 }
 
+slong
+rat_max_length(const rat_t rat)
+{
+    slong maxlen = 0;
+    for (ulong i = 0; i < rat->num; i++) {
+        maxlen = FLINT_MAX(maxlen, fmpz_mpoly_length(&rat->factors[i], ctx));
+    }
+    return maxlen;
+}
+
+void
+rat_sort(rat_t rat)
+{
+    for (ulong i = 0; i < rat->num; i++) {
+        slong nterms1 = fmpz_mpoly_length(&rat->factors[i], ctx);
+        for (ulong j = i+1; j < rat->num; j++) {
+            slong nterms2 = fmpz_mpoly_length(&rat->factors[j], ctx);
+            if (nterms2 > nterms1) {
+                fmpz_mpoly_swap(&rat->factors[i], &rat->factors[j], ctx);
+                SWAP(int, rat->powers[i], rat->powers[j]);
+                nterms1 = nterms2;
+            }
+        }
+    }
+}
+
+void
+rat_reverse(rat_t rat)
+{
+    for (ulong i = 0; i < rat->num/2; i++) {
+        ulong j = rat->num - 1 - i;
+        assert(i < j);
+        fmpz_mpoly_swap(&rat->factors[i], &rat->factors[j], ctx);
+        SWAP(int, rat->powers[i], rat->powers[j]);
+    }
+}
+
 void
 rat_cofactorize(rat_t rat)
 {
     LOGME;
+    logd("Cofactorizing %r", rat);
+    rat_sort(rat);
     fmpz_mpoly_t gcd, aprime, bprime;
     fmpz_mpoly_init(gcd, ctx);
     fmpz_mpoly_init(aprime, ctx);
@@ -354,9 +393,9 @@ rat_cofactorize(rat_t rat)
             if (fmpz_mpoly_is_one(gcd, ctx)) {
                 continue;
             }
-            fmpz_mpoly_div(aprime, A, gcd, ctx);
-            fmpz_mpoly_div(bprime, B, gcd, ctx);
-            logd("Split factor: %p^%d", gcd, Apower + Bpower);
+            logd("Split factor: %p^%d from %p^%d %p^%d", gcd, Apower + Bpower, A, Apower, B, Bpower);
+            if (fmpz_mpoly_divides(aprime, A, gcd, ctx) != 1) { assert(0); }
+            if (fmpz_mpoly_divides(bprime, B, gcd, ctx) != 1) { assert(0); }
             fmpz_mpoly_swap(A, aprime, ctx);
             fmpz_mpoly_swap(B, bprime, ctx);
             rat_mul_fmpz_mpoly_setx(rat, gcd, Apower + Bpower);
@@ -378,6 +417,7 @@ rat_cofactorize(rat_t rat)
     fmpz_mpoly_clear(gcd, ctx);
     fmpz_mpoly_clear(aprime, ctx);
     fmpz_mpoly_clear(bprime, ctx);
+    rat_sort(rat);
 }
 
 void
@@ -485,6 +525,7 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2)
     rat_expand_denominator(aden, rat1);
     rat_expand_numerator(bnum, rat2);
     rat_expand_denominator(bden, rat2);
+    logd("Computing %p*%p + %p*%p", anum, bden, bnum, aden);
     fmpz_mpoly_mul(anum, anum, bden, ctx);
     fmpz_mpoly_mul(bnum, bnum, aden, ctx);
     fmpz_mpoly_add(anum, anum, bnum, ctx);
@@ -504,11 +545,12 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2)
     }
     rat_mul_fmpz(res, fmpq_denref(rat1->numfactor), -1);
     rat_mul_fmpz(res, fmpq_denref(rat2->numfactor), -1);
-    logd("Result is %r", res);
     #undef A
     #undef Apower
     #undef B
     #undef Bpower
+    rat_cofactorize(res);
+    logd("Result is %r", res);
 }
 
 /* Rational sum
@@ -579,17 +621,29 @@ void
 ratsum_sum_setx(rat_t rat, ratsum_t sum)
 {
     LOGME;
-    ulong nadditions = 0;
-    for (ulong step = 1; step < sum->num; step *= 2) {
-        for (ulong i = 0; i < sum->num - step; i += 2*step) {
-            nadditions++;
-            logd("Adding terms %ld + %ld => %ld (%ld of %ld)", i+1, i+step+1, i+1, nadditions, sum->num-1);
-            rat_add_setx(rat, &sum->terms[i], &sum->terms[i + step]);
-            rat_swap(&sum->terms[i], rat);
+    for (ulong n = 0; n < sum->num-1; n++) {
+        // Find two shortest rationals, add them.
+        slong length1 = LONG_MAX, idx1 = -1;
+        slong length2 = LONG_MAX, idx2 = -1;
+        for (ulong i = 0; i < sum->num - n; i++) {
+            slong length = rat_max_length(&sum->terms[i]);
+            if (length < length1) {
+                length2 = length1; idx2 = idx1;
+                length1 = length; idx1 = i;
+                continue;
+            }
+            if (length < length2) {
+                length2 = length; idx2 = i;
+                continue;
+            }
         }
+        assert((idx1 >= 0) && (idx2 >= 0) && (idx1 != idx2));
+        logd("Adding pair %ld of %ld", n+1, sum->num-1);
+        rat_add_setx(rat, &sum->terms[idx1], &sum->terms[idx2]);
+        rat_swap(&sum->terms[idx1], rat);
+        rat_swap(&sum->terms[idx2], &sum->terms[sum->num - n - 1]);
     }
     rat_swap(&sum->terms[0], rat);
-    rat_cofactorize(rat);
 }
 
 /* GiNaC conversion
@@ -864,6 +918,8 @@ main(int argc, char *argv[])
     rat_init(rat);
     ratsum_sum_setx(rat, sum);
     ratsum_clear(sum);
+    rat_sort(rat);
+    rat_reverse(rat);
     save_output(outputfile, rat);
     rat_clear(rat);
     return 0;
