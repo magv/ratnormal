@@ -20,6 +20,7 @@ Ss{EXAMPLES}
 
     $ echo '2/3/(x + 2*y^2)^2 - 1/(x + 6*x*y^2)' | ratnormal -
     (
+     1/3 *
      (-3*x^2+2*x-12*y^4) *
      1/(6*x*y^2+x) *
      1/(x+2*y^2)^2
@@ -263,7 +264,7 @@ rat_mul_fmpz_mpoly_setx(rat_t rat, fmpz_mpoly_t poly, int power)
 void
 rat_fprint(FILE *f, const rat_t rat)
 {
-    if (!fmpq_is_one(rat->numfactor)) {
+    if ((rat->num == 0) || !fmpq_is_one(rat->numfactor)) {
         fprintf(f, " ");
         fmpq_fprint(f, rat->numfactor);
         if (0 != rat->num) {
@@ -353,7 +354,7 @@ rat_cofactorize(rat_t rat)
             if (fmpz_mpoly_is_one(gcd, ctx)) {
                 continue;
             }
-            logd("Split factor (pow %d): %P", Apower + Bpower, gcd);
+            logd("Split factor: %p^%d", gcd, Apower + Bpower);
             fmpz_mpoly_swap(A, aprime, ctx);
             fmpz_mpoly_swap(B, bprime, ctx);
             rat_mul_fmpz_mpoly_setx(rat, gcd, Apower + Bpower);
@@ -430,24 +431,24 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2)
     fmpz_mpoly_init(gcd, ctx);
     fmpz_mpoly_init(aprime, ctx);
     fmpz_mpoly_init(bprime, ctx);
+    #define A (&rat1->factors[i])
+    #define Apower rat1->powers[i]
+    #define B (&rat2->factors[j])
+    #define Bpower rat2->powers[j]
     for (ulong i = 0; i < rat1->num; i++) {
-        #define A (&rat1->factors[i])
-        #define Apower rat1->powers[i]
         if (Apower >= 0) continue;
         for (ulong j = 0; j < rat2->num; j++) {
-            #define B (&rat2->factors[j])
-            #define Bpower rat2->powers[j]
             if (Bpower >= 0) continue;
             fmpz_mpoly_gcd_cofactors(gcd, aprime, bprime, A, B, ctx);
             if (fmpz_mpoly_is_one(gcd, ctx)) {
                 continue;
             }
             int power = FLINT_MAX(Apower, Bpower);
-            //logd("Common factor (pow %d): %P", power, gcd);
+            //logd("Common factor: %p^%d", gcd, power);
             fmpz_mpoly_swap(A, aprime, ctx);
             fmpz_mpoly_swap(B, bprime, ctx);
-            rat_mul_fmpz_mpoly(rat1, gcd, power - Apower);
-            rat_mul_fmpz_mpoly(rat2, gcd, power - Bpower);
+            rat_mul_fmpz_mpoly(rat1, gcd, Apower - power);
+            rat_mul_fmpz_mpoly(rat2, gcd, Bpower - power);
             rat_mul_fmpz_mpoly_setx(res, gcd, power);
             if (fmpz_mpoly_is_fmpz(B, ctx)) {
                 rat_swapoff_fmpz_factor(rat2, j);
@@ -471,6 +472,7 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2)
     fmpq_mul_fmpz(rat2->numfactor, rat2->numfactor, g);
     rat_mul_fmpz(res, g, -1);
     fmpz_clear(g);
+    logd("Common factor: %r", res);
     // Then, expand the combined numerator.
     fmpz_mpoly_t anum, aden, bnum, bden;
     fmpz_mpoly_init(anum, ctx);
@@ -498,7 +500,13 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2)
         if (Bpower >= 0) continue;
         rat_mul_fmpz_mpoly_setx(res, B, Bpower);
     }
+    rat_mul_fmpz(res, fmpq_denref(rat1->numfactor), -1);
+    rat_mul_fmpz(res, fmpq_denref(rat2->numfactor), -1);
     logd("Result is %r", res);
+    #undef A
+    #undef Apower
+    #undef B
+    #undef Bpower
 }
 
 /* Rational sum
@@ -708,6 +716,14 @@ print_poly(FILE *f, const struct printf_info *info, const void *const *args)
 }
 
 int
+print_poly_short(FILE *f, const struct printf_info *info, const void *const *args)
+{
+    slong nterms = fmpz_mpoly_length(**((const fmpz_mpoly_t **)(args[0])), ctx);
+    fprintf(f, "P{%ldt}", nterms);
+    return 1;
+}
+
+int
 print_rat(FILE *f, const struct printf_info *info, const void *const *args)
 {
     rat_fprint(f, **((const rat_t **)(args[0])));
@@ -759,7 +775,7 @@ void
 save_output(const char *filename, rat_t rat)
 {
     LOGME;
-    logd("Saving the output to %s", filename);
+    logd("Saving %r to %s", rat, filename);
     FILE *f;
     if (strcmp(filename, "-") != 0) {
         f = fopen(filename, "wb");
@@ -807,6 +823,7 @@ main(int argc, char *argv[])
 {
     register_printf_function('F', print_fmpz, print_ptr_arginfo);
     register_printf_function('P', print_poly, print_ptr_arginfo);
+    register_printf_function('p', print_poly_short, print_ptr_arginfo);
     register_printf_function('R', print_rat, print_ptr_arginfo);
     register_printf_function('r', print_rat_short, print_ptr_arginfo);
     register_printf_function('S', print_ratsum, print_ptr_arginfo);

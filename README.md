@@ -40,6 +40,7 @@ of the denominator.
 
     $ echo '2/3/(x + 2*y^2)^2 - 1/(x + 6*x*y^2)' | ratnormal -
     (
+     1/3 *
      (-3*x^2+2*x-12*y^4) *
      1/(6*x*y^2+x) *
      1/(x+2*y^2)^2
