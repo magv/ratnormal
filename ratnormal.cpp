@@ -638,6 +638,7 @@ rat_of_ginac(rat_t rat, const GiNaC::ex &expr)
     factor_iter(expr, [&](const ex &polyfactor, int pfpower) {
         if (is_a<numeric>(polyfactor)) {
             numeric npf = ex_to<numeric>(polyfactor);
+            assert(npf.imag() == 0);
             fmpq_t n;
             fmpq_init(n);
             fmpq_set_si(n, npf.numer().to_long(), npf.denom().to_long());
@@ -657,6 +658,7 @@ rat_of_ginac(rat_t rat, const GiNaC::ex &expr)
                     if (is_a<numeric>(f)) {
                         numeric ntf = ex_to<numeric>(f);
                         assert(ntf.denom() == 1);
+                        assert(ntf.imag() == 0);
                         fmpz_t npow;
                         fmpz_init_set_si(npow, ntf.numer().to_long());
                         fmpz_pow_ui(npow, npow, tfpower);
