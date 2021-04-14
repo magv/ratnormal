@@ -579,9 +579,11 @@ void
 ratsum_sum_setx(rat_t rat, ratsum_t sum)
 {
     LOGME;
+    ulong nadditions = 0;
     for (ulong step = 1; step < sum->num; step *= 2) {
         for (ulong i = 0; i < sum->num - step; i += 2*step) {
-            logd("Adding terms %d + %d => %d", i+1, i+step+1, i+1);
+            nadditions++;
+            logd("Adding terms %ld + %ld => %ld (%ld of %ld)", i+1, i+step+1, i+1, nadditions, sum->num-1);
             rat_add_setx(rat, &sum->terms[i], &sum->terms[i + step]);
             rat_swap(&sum->terms[i], rat);
         }
