@@ -350,10 +350,12 @@ rat_cofactorize(rat_t rat)
             #define B (&rat->factors[j])
             #define Bpower rat->powers[j]
             //if (Bpower >= 0) continue;
-            fmpz_mpoly_gcd_cofactors(gcd, aprime, bprime, A, B, ctx);
+            fmpz_mpoly_gcd(gcd, A, B, ctx);
             if (fmpz_mpoly_is_one(gcd, ctx)) {
                 continue;
             }
+            fmpz_mpoly_div(aprime, A, gcd, ctx);
+            fmpz_mpoly_div(bprime, B, gcd, ctx);
             logd("Split factor: %p^%d", gcd, Apower + Bpower);
             fmpz_mpoly_swap(A, aprime, ctx);
             fmpz_mpoly_swap(B, bprime, ctx);
