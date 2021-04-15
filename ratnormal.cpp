@@ -125,6 +125,16 @@ rat_ctx_init()
     fmpz_mpoly_ctx_init(ctx, nvariables, ORD_LEX);
 }
 
+void
+rat_ctx_clear()
+{
+    fmpz_mpoly_ctx_clear(ctx);
+    for (ulong i = 0; i < nvariables; i++) {
+        flint_free((void*)variable_names[i]);
+        variable_names[i] = NULL;
+    }
+}
+
 /* Rational
  */
 
@@ -152,6 +162,9 @@ void
 rat_one(rat_t rat)
 {
     fmpq_one(rat->numfactor);
+    for (ulong i = 0; i < rat->num; i++) {
+        fmpz_mpoly_clear(&rat->factors[i], ctx);
+    }
     rat->num = 0;
 }
 
@@ -259,7 +272,6 @@ rat_mul_fmpz_mpoly_setx(rat_t rat, fmpz_mpoly_t poly, int power)
         rat->num++;
     }
 }
-
 
 void
 rat_fprint(FILE *f, const rat_t rat)
@@ -575,6 +587,9 @@ ratsum_init(ratsum_t sum)
 void
 ratsum_zero(ratsum_t sum)
 {
+    for (ulong i = 0; i < sum->num; i++) {
+        rat_clear(&sum->terms[i]);
+    }
     sum->num = 0;
 }
 
@@ -591,6 +606,9 @@ ratsum_fit_length(ratsum_t sum, ulong len)
 void
 ratsum_clear(ratsum_t sum)
 {
+    for (ulong i = 0; i < sum->num; i++) {
+        rat_clear(&sum->terms[i]);
+    }
     flint_free(sum->terms);
     sum->terms = NULL;
     sum->num = 0;
@@ -941,5 +959,6 @@ main(int argc, char *argv[])
     rat_reverse(rat);
     save_output(outputfile, rat);
     rat_clear(rat);
+    rat_ctx_clear();
     return 0;
 }
