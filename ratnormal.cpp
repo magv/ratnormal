@@ -55,8 +55,6 @@ Ss{AUTHORS}
 #include <time.h>
 #include <unistd.h>
 
-using namespace std;
-
 static bool COLORS = !!isatty(STDERR_FILENO);
 
 /* Misc
@@ -82,7 +80,7 @@ static double log_last_timestamp = log_first_timestamp;
 typedef struct {
     const char *name;
     double time;
-} _log_func_info;
+} log_func_info;
 
 #define logd(fmt, ...) {\
     double NOW = timestamp(); \
@@ -90,31 +88,31 @@ typedef struct {
     log_last_timestamp = NOW; \
 }
 
-void
-_log_func_start(const _log_func_info *i)
+static void
+log_func_start(const log_func_info *i)
 {
     logd("> %s()", i->name);
     log_depth++;
 }
 
-void
-_log_func_end(const _log_func_info *i)
+static void
+log_func_end(const log_func_info *i)
 {
     log_depth--;
     logd("< %s(%.4fs)", i->name, NOW - i->time);
 }
 
 #define LOGME \
-    __attribute__((cleanup(_log_func_end))) _log_func_info _log_func_info = {__func__, timestamp()}; \
-    _log_func_start(&_log_func_info);
+    __attribute__((cleanup(log_func_end))) log_func_info _log_func_info = {__func__, timestamp()}; \
+    log_func_start(&_log_func_info);
 
 /* Rational context
  */
 
 // struct rat_ctx {
 fmpz_mpoly_ctx_t ctx;
-map<string, int> variable2index;
-vector<string> variables;
+std::map<std::string, int> variable2index;
+std::vector<std::string> variables;
 const char **variable_names;
 #define nvariables (variables.size())
 // }
@@ -657,32 +655,43 @@ ratsum_sum_setx(rat_t rat, ratsum_t sum)
         }
         assert((idx1 >= 0) && (idx2 >= 0) && (idx1 != idx2));
         logd("Adding pair %ld of %ld", n+1, sum->num-1);
+        //rat_set(tmp1, &sum->terms[idx1]);
+        //rat_set(tmp2, &sum->terms[idx2]);
         rat_add_setx(rat, &sum->terms[idx1], &sum->terms[idx2]);
+        /*
+        if (1) {
+            logd("Same pair, but with combined den");
+            rat_combine_denominators(tmp1);
+            rat_combine_denominators(tmp2);
+            rat_add_setx(tmp3, tmp1, tmp2);
+        }
+        */
         rat_swap(&sum->terms[idx1], rat);
         rat_swap(&sum->terms[idx2], &sum->terms[sum->num - n - 1]);
     }
     rat_swap(&sum->terms[0], rat);
+    //rat_clear(tmp1);
+    //rat_clear(tmp2);
+    //rat_clear(tmp3);
 }
 
 /* GiNaC conversion
  */
 
-using namespace GiNaC;
-
 template <typename F> void
-factor_iter(const ex &e, F yield)
+factor_iter(const GiNaC::ex &e, F yield)
 {
-    if (is_a<mul>(e)) {
+    if (GiNaC::is_a<GiNaC::mul>(e)) {
         for (const auto &f : e) {
-            if (is_a<power>(f)) {
-                yield(f.op(0), ex_to<numeric>(f.op(1)).to_int());
+            if (GiNaC::is_a<GiNaC::power>(f)) {
+                yield(f.op(0), GiNaC::ex_to<GiNaC::numeric>(f.op(1)).to_int());
             } else {
                 yield(f, 1);
             }
         }
     } else {
-        if (is_a<power>(e)) {
-            yield(e.op(0), ex_to<numeric>(e.op(1)).to_int());
+        if (GiNaC::is_a<GiNaC::power>(e)) {
+            yield(e.op(0), GiNaC::ex_to<GiNaC::numeric>(e.op(1)).to_int());
         } else {
             yield(e, 1);
         }
@@ -690,9 +699,9 @@ factor_iter(const ex &e, F yield)
 }
 
 template <typename F> void
-term_iter(const ex &e, F yield)
+term_iter(const GiNaC::ex &e, F yield)
 {
-    if (is_a<add>(e)) {
+    if (GiNaC::is_a<GiNaC::add>(e)) {
         for (const auto &t : e) {
             yield(t);
         }
@@ -713,8 +722,8 @@ void
 fmpq_of_ginac(fmpq_t x, const GiNaC::numeric &n)
 {
     assert(n.is_rational());
-    const numeric num = n.numer();
-    const numeric den = n.denom();
+    const GiNaC::numeric num = n.numer();
+    const GiNaC::numeric den = n.denom();
     assert((LONG_MIN <= num) && (num <= LONG_MAX));
     assert((LONG_MIN <= den) && (den <= LONG_MAX));
     fmpq_set_si(x, num.to_long(), den.to_long());
@@ -725,10 +734,10 @@ rat_of_ginac(rat_t rat, const GiNaC::ex &expr)
 {
     LOGME;
     rat_one(rat);
-    vector<ulong> exp(nvariables);
-    factor_iter(expr, [&](const ex &polyfactor, int pfpower) {
-        if (is_a<numeric>(polyfactor)) {
-            numeric npf = ex_to<numeric>(polyfactor);
+    std::vector<ulong> exp(nvariables);
+    factor_iter(expr, [&](const GiNaC::ex &polyfactor, int pfpower) {
+        if (GiNaC::is_a<GiNaC::numeric>(polyfactor)) {
+            GiNaC::numeric npf = GiNaC::ex_to<GiNaC::numeric>(polyfactor);
             assert(npf.is_rational());
             fmpq_t n;
             fmpq_init(n);
@@ -738,16 +747,16 @@ rat_of_ginac(rat_t rat, const GiNaC::ex &expr)
         } else {
             fmpz_mpoly_t poly;
             fmpz_mpoly_init(poly, ctx);
-            term_iter(polyfactor.expand(), [&](const ex &term) {
+            term_iter(polyfactor.expand(), [&](const GiNaC::ex &term) {
                 fmpz_t coef;
                 fmpz_init_set_ui(coef, 1);
                 for (ulong i = 0; i < nvariables; i++) {
                     exp[i] = 0;
                 }
-                factor_iter(term, [&](const ex &f, int tfpower) {
+                factor_iter(term, [&](const GiNaC::ex &f, int tfpower) {
                     assert(tfpower >= 0);
-                    if (is_a<numeric>(f)) {
-                        numeric ntf = ex_to<numeric>(f);
+                    if (GiNaC::is_a<GiNaC::numeric>(f)) {
+                        GiNaC::numeric ntf = GiNaC::ex_to<GiNaC::numeric>(f);
                         assert(ntf.is_integer());
                         fmpz_t npow;
                         fmpz_init(npow);
@@ -755,8 +764,8 @@ rat_of_ginac(rat_t rat, const GiNaC::ex &expr)
                         fmpz_pow_ui(npow, npow, tfpower);
                         fmpz_mul(coef, coef, npow);
                         fmpz_clear(npow);
-                    } else if (is_a<symbol>(f)) {
-                        symbol sym = ex_to<symbol>(f);
+                    } else if (GiNaC::is_a<GiNaC::symbol>(f)) {
+                        GiNaC::symbol sym = GiNaC::ex_to<GiNaC::symbol>(f);
                         int varidx = variable2index[sym.get_name()];
                         exp[varidx] += tfpower;
                     } else {
@@ -778,7 +787,7 @@ void
 ratsum_of_ginac(ratsum_t sum, const GiNaC::ex &expr)
 {
     ratsum_zero(sum);
-    term_iter(expr, [&](const ex &term) {
+    term_iter(expr, [&](const GiNaC::ex &term) {
         rat_t rat;
         rat_init(rat);
         rat_of_ginac(rat, term);
@@ -846,12 +855,12 @@ load_input(const char *filename)
 {
     LOGME;
     GiNaC::parser reader;
-    ex expr;
+    GiNaC::ex expr;
     if (strcmp(filename, "-") != 0) {
-        ifstream ifs(filename);
+        std::ifstream ifs(filename);
         expr = reader(ifs);
     } else {
-        expr = reader(cin);
+        expr = reader(std::cin);
     }
     // List variable names, init context.
     auto &name2sym = reader.get_syms();
