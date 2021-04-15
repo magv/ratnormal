@@ -876,6 +876,10 @@ save_output(const char *filename, rat_t rat)
     FILE *f;
     if (strcmp(filename, "-") != 0) {
         f = fopen(filename, "wb");
+        if (f == NULL) {
+            fprintf(stderr, "ratnormal: can't open file %s\n", filename);
+            exit(1);
+        }
     } else {
         f = stdout;
     }
