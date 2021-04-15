@@ -684,6 +684,25 @@ term_iter(const ex &e, F yield)
 }
 
 void
+fmpz_of_ginac(fmpz_t x, const GiNaC::numeric &num)
+{
+    assert(num.is_integer());
+    assert((LONG_MIN <= num) && (num <= LONG_MAX));
+    fmpz_set_si(x, num.to_long());
+}
+
+void
+fmpq_of_ginac(fmpq_t x, const GiNaC::numeric &n)
+{
+    assert(n.is_rational());
+    const numeric num = n.numer();
+    const numeric den = n.denom();
+    assert((LONG_MIN <= num) && (num <= LONG_MAX));
+    assert((LONG_MIN <= den) && (den <= LONG_MAX));
+    fmpq_set_si(x, num.to_long(), den.to_long());
+}
+
+void
 rat_of_ginac(rat_t rat, const GiNaC::ex &expr)
 {
     LOGME;
@@ -692,10 +711,10 @@ rat_of_ginac(rat_t rat, const GiNaC::ex &expr)
     factor_iter(expr, [&](const ex &polyfactor, int pfpower) {
         if (is_a<numeric>(polyfactor)) {
             numeric npf = ex_to<numeric>(polyfactor);
-            assert(npf.imag() == 0);
+            assert(npf.is_rational());
             fmpq_t n;
             fmpq_init(n);
-            fmpq_set_si(n, npf.numer().to_long(), npf.denom().to_long());
+            fmpq_of_ginac(n, npf);
             rat_mul_fmpq(rat, n, pfpower);
             fmpq_clear(n);
         } else {
@@ -711,10 +730,10 @@ rat_of_ginac(rat_t rat, const GiNaC::ex &expr)
                     assert(tfpower >= 0);
                     if (is_a<numeric>(f)) {
                         numeric ntf = ex_to<numeric>(f);
-                        assert(ntf.denom() == 1);
-                        assert(ntf.imag() == 0);
+                        assert(ntf.is_integer());
                         fmpz_t npow;
-                        fmpz_init_set_si(npow, ntf.numer().to_long());
+                        fmpz_init(npow);
+                        fmpz_of_ginac(npow, ntf);
                         fmpz_pow_ui(npow, npow, tfpower);
                         fmpz_mul(coef, coef, npow);
                         fmpz_clear(npow);
