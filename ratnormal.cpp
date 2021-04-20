@@ -30,6 +30,7 @@ Ss{OPTIONS}
     Fl{-j} Ar{threads} Use this many worker threads, if possible (default: 1).
     Fl{-h}         Show this help message.
     Fl{-C}         Force colored output even if stderr is not a tty.
+    Fl{-V}         Print version information.
 
 Ss{ARGUMENTS}
     Ar{input}      Read the input expression from this file, with "-"

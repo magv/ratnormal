@@ -60,6 +60,10 @@ of the denominator.
 
   Force colored output even if stderr is not a tty.
 
+* -V
+
+  Print version information.
+
 ## ARGUMENTS
 
 * *input*
