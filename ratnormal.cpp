@@ -203,6 +203,20 @@ rat_fit_length(rat_t rat, ulong len)
 }
 
 void
+rat_set(rat_t rat, const rat_t src)
+{
+    rat_one(rat);
+    fmpq_set(rat->numfactor, src->numfactor);
+    rat_fit_length(rat, src->num);
+    for (ulong i = 0; i < src->num; i++) {
+        fmpz_mpoly_init(&rat->factors[i], ctx);
+        fmpz_mpoly_set(&rat->factors[i], &src->factors[i], ctx);
+        rat->powers[i] = src->powers[i];
+    }
+    rat->num = src->num;
+}
+
+void
 rat_mul_fmpq(rat_t rat, const fmpq_t x, const int power)
 {
     assert(!fmpq_is_zero(x));
@@ -386,11 +400,8 @@ rat_cofactorize(rat_t rat)
 {
     LOGME;
     logd("Cofactorizing %r", rat);
-    rat_sort(rat);
-    fmpz_mpoly_t gcd, aprime, bprime;
+    fmpz_mpoly_t gcd;
     fmpz_mpoly_init(gcd, ctx);
-    fmpz_mpoly_init(aprime, ctx);
-    fmpz_mpoly_init(bprime, ctx);
     for (ulong i = 0; i < rat->num; i++) {
         #define A (&rat->factors[i])
         #define Apower rat->powers[i]
@@ -403,11 +414,9 @@ rat_cofactorize(rat_t rat)
             if (fmpz_mpoly_is_one(gcd, ctx)) {
                 continue;
             }
-            logd("Split factor: %p^%d from %p^%d %p^%d", gcd, Apower + Bpower, A, Apower, B, Bpower);
-            if (fmpz_mpoly_divides(aprime, A, gcd, ctx) != 1) { assert(0); }
-            if (fmpz_mpoly_divides(bprime, B, gcd, ctx) != 1) { assert(0); }
-            fmpz_mpoly_swap(A, aprime, ctx);
-            fmpz_mpoly_swap(B, bprime, ctx);
+            logd("Split factor %p^%d from %p^%d %p^%d", gcd, Apower + Bpower, A, Apower, B, Bpower);
+            if (fmpz_mpoly_divides(A, A, gcd, ctx) != 1) { assert(0); }
+            if (fmpz_mpoly_divides(B, B, gcd, ctx) != 1) { assert(0); }
             rat_mul_fmpz_mpoly_setx(rat, gcd, Apower + Bpower);
             if (fmpz_mpoly_is_fmpz(B, ctx)) {
                 rat_swapoff_fmpz_factor(rat, j);
@@ -425,9 +434,6 @@ rat_cofactorize(rat_t rat)
         #undef Apower
     }
     fmpz_mpoly_clear(gcd, ctx);
-    fmpz_mpoly_clear(aprime, ctx);
-    fmpz_mpoly_clear(bprime, ctx);
-    rat_sort(rat);
 }
 
 void
@@ -559,7 +565,9 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2)
     #undef Apower
     #undef B
     #undef Bpower
+    rat_sort(res);
     rat_cofactorize(res);
+    rat_sort(res);
     logd("Result is %r", res);
 }
 
@@ -655,24 +663,11 @@ ratsum_sum_setx(rat_t rat, ratsum_t sum)
         }
         assert((idx1 >= 0) && (idx2 >= 0) && (idx1 != idx2));
         logd("Adding pair %ld of %ld", n+1, sum->num-1);
-        //rat_set(tmp1, &sum->terms[idx1]);
-        //rat_set(tmp2, &sum->terms[idx2]);
         rat_add_setx(rat, &sum->terms[idx1], &sum->terms[idx2]);
-        /*
-        if (1) {
-            logd("Same pair, but with combined den");
-            rat_combine_denominators(tmp1);
-            rat_combine_denominators(tmp2);
-            rat_add_setx(tmp3, tmp1, tmp2);
-        }
-        */
         rat_swap(&sum->terms[idx1], rat);
         rat_swap(&sum->terms[idx2], &sum->terms[sum->num - n - 1]);
     }
     rat_swap(&sum->terms[0], rat);
-    //rat_clear(tmp1);
-    //rat_clear(tmp2);
-    //rat_clear(tmp3);
 }
 
 /* GiNaC conversion
@@ -791,7 +786,9 @@ ratsum_of_ginac(ratsum_t sum, const GiNaC::ex &expr)
         rat_t rat;
         rat_init(rat);
         rat_of_ginac(rat, term);
+        rat_sort(rat);
         rat_cofactorize(rat);
+        rat_sort(rat);
         ratsum_add_rat_setx(sum, rat);
         rat_clear(rat);
     });
@@ -940,10 +937,11 @@ main(int argc, char *argv[])
     int nthreads = 1;
     const char *inputfile = "-";
     const char *outputfile = "-";
-    for (int opt; (opt = getopt(argc, (char*const*)argv, "j:hC")) != -1;) {
+    for (int opt; (opt = getopt(argc, (char*const*)argv, "j:hCV")) != -1;) {
         switch (opt) {
         case 'j': nthreads = atoi(optarg); break;
         case 'h': usage(stdout); return 0;
+        case 'V': printf("%s", VERSION); return 0;
         case 'C': COLORS = true; break;
         default: return 1;
         }
