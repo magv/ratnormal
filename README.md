@@ -24,7 +24,7 @@ expressions.
 
 ## SYNOPSYS
 
-`ratnormal` [-hC] [-j *threads*] *input* [*output*]
+`ratnormal` [-ndhC] [-j *threads*] *input* [*output*]
 
 ## DESCRIPTION
 
@@ -47,6 +47,14 @@ of the denominator.
     )
 
 ## OPTIONS
+
+* -n
+
+  Allow expanding the final numerator to improve performance.
+
+* -d
+
+  Allow expanding the final denominator.
 
 * -j *threads*
 

@@ -4,7 +4,7 @@ Ss{NAME}
     expressions.
 
 Ss{SYNOPSYS}
-    Nm{ratnormal} [Fl{-hC}] [Fl{-j} Ar{threads}] Ar{input} [Ar{output}]
+    Nm{ratnormal} [Fl{-ndhC}] [Fl{-j} Ar{threads}] Ar{input} [Ar{output}]
 
 Ss{DESCRIPTION}
 
@@ -27,6 +27,8 @@ Ss{EXAMPLES}
     )
 
 Ss{OPTIONS}
+    Fl{-n}         Allow expanding the final numerator to improve performance.
+    Fl{-d}         Allow expanding the final denominator.
     Fl{-j} Ar{threads} Use this many worker threads, if possible (default: 1).
     Fl{-h}         Show this help message.
     Fl{-C}         Force colored output even if stderr is not a tty.
@@ -480,12 +482,12 @@ rat_expand_denominator(fmpz_mpoly_t poly, const rat_t rat)
 }
 
 void
-rat_add_setx(rat_t res, rat_t rat1, rat_t rat2)
+rat_add_setx(rat_t res, rat_t rat1, rat_t rat2, bool fnum, bool fden)
 {
     LOGME;
     logd("Adding %r and %r", rat1, rat2);
     rat_one(res);
-    // First, take out common factors out of the denominators.
+    // First, take out common factors.
     fmpz_mpoly_t gcd, aprime, bprime;
     fmpz_mpoly_init(gcd, ctx);
     fmpz_mpoly_init(aprime, ctx);
@@ -495,9 +497,9 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2)
     #define B (&rat2->factors[j])
     #define Bpower rat2->powers[j]
     for (ulong i = 0; i < rat1->num; i++) {
-        if (Apower >= 0) continue;
+        if (Apower >= 0 && fnum) continue;
         for (ulong j = 0; j < rat2->num; j++) {
-            if (Bpower >= 0) continue;
+            if (Bpower >= 0 && fnum) continue;
             fmpz_mpoly_gcd_cofactors(gcd, aprime, bprime, A, B, ctx);
             if (fmpz_mpoly_is_one(gcd, ctx)) {
                 continue;
@@ -548,20 +550,25 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2)
     fmpz_mpoly_add(anum, anum, bnum, ctx);
     rat_mul_fmpz_mpoly_setx(res, anum, 1);
     fmpz_mpoly_clear(anum, ctx);
-    fmpz_mpoly_clear(aden, ctx);
     fmpz_mpoly_clear(bnum, ctx);
-    fmpz_mpoly_clear(bden, ctx);
     // Finally, multiply by the combined denominator.
-    for (ulong i = 0; i < rat1->num; i++) {
-        if (Apower >= 0) continue;
-        rat_mul_fmpz_mpoly_setx(res, A, Apower);
+    if (!fden) {
+        for (ulong i = 0; i < rat1->num; i++) {
+            if (Apower >= 0) continue;
+            rat_mul_fmpz_mpoly_setx(res, A, Apower);
+        }
+        for (ulong j = 0; j < rat2->num; j++) {
+            if (Bpower >= 0) continue;
+            rat_mul_fmpz_mpoly_setx(res, B, Bpower);
+        }
+        rat_mul_fmpz(res, fmpq_denref(rat1->numfactor), -1);
+        rat_mul_fmpz(res, fmpq_denref(rat2->numfactor), -1);
+    } else {
+        rat_mul_fmpz_mpoly_setx(res, aden, -1);
+        rat_mul_fmpz_mpoly_setx(res, bden, -1);
     }
-    for (ulong j = 0; j < rat2->num; j++) {
-        if (Bpower >= 0) continue;
-        rat_mul_fmpz_mpoly_setx(res, B, Bpower);
-    }
-    rat_mul_fmpz(res, fmpq_denref(rat1->numfactor), -1);
-    rat_mul_fmpz(res, fmpq_denref(rat2->numfactor), -1);
+    fmpz_mpoly_clear(aden, ctx);
+    fmpz_mpoly_clear(bden, ctx);
     #undef A
     #undef Apower
     #undef B
@@ -643,7 +650,7 @@ ratsum_add_rat_setx(ratsum_t sum, rat_t rat)
 }
 
 void
-ratsum_sum_setx(rat_t rat, ratsum_t sum)
+ratsum_sum_setx(rat_t rat, ratsum_t sum, bool fnum, bool fden)
 {
     LOGME;
     for (ulong n = 0; n < sum->num-1; n++) {
@@ -664,7 +671,7 @@ ratsum_sum_setx(rat_t rat, ratsum_t sum)
         }
         assert((idx1 >= 0) && (idx2 >= 0) && (idx1 != idx2));
         logd("Adding pair %ld of %ld", n+1, sum->num-1);
-        rat_add_setx(rat, &sum->terms[idx1], &sum->terms[idx2]);
+        rat_add_setx(rat, &sum->terms[idx1], &sum->terms[idx2], fnum, fden);
         rat_swap(&sum->terms[idx1], rat);
         rat_swap(&sum->terms[idx2], &sum->terms[sum->num - n - 1]);
     }
@@ -936,14 +943,18 @@ main(int argc, char *argv[])
     register_printf_function('r', print_rat_short, print_ptr_arginfo);
     register_printf_function('S', print_ratsum, print_ptr_arginfo);
     int nthreads = 1;
+    bool factor_numerator = false;
+    bool factor_denominator = false;
     const char *inputfile = "-";
     const char *outputfile = "-";
-    for (int opt; (opt = getopt(argc, (char*const*)argv, "j:hCV")) != -1;) {
+    for (int opt; (opt = getopt(argc, (char*const*)argv, "j:hCVnd")) != -1;) {
         switch (opt) {
         case 'j': nthreads = atoi(optarg); break;
         case 'h': usage(stdout); return 0;
         case 'V': printf("%s", VERSION); return 0;
         case 'C': COLORS = true; break;
+        case 'n': factor_numerator = true; break;
+        case 'd': factor_denominator = true; break;
         default: return 1;
         }
     }
@@ -965,7 +976,7 @@ main(int argc, char *argv[])
     ratsum_of_ginac(sum, expr);
     rat_t rat;
     rat_init(rat);
-    ratsum_sum_setx(rat, sum);
+    ratsum_sum_setx(rat, sum, factor_numerator, factor_denominator);
     ratsum_clear(sum);
     rat_sort(rat);
     rat_reverse(rat);
