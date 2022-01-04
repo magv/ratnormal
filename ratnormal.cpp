@@ -590,8 +590,13 @@ rat_take_out_monomials(rat_t rat)
         fmpz_mpoly_term_content(m, &rat->factors[i], ctx);
         if (fmpz_mpoly_is_one(m, ctx)) continue;
         if (fmpz_mpoly_divides(&rat->factors[i], &rat->factors[i], m, ctx) != 1) { assert(0); }
-        if (fmpz_mpoly_pow_ui(m, m, rat->powers[i], ctx) != 1) { assert(0); };
-        rat_mul_fmpz_mpoly_setx(rat, m, 1);
+        if (rat->powers[i] > 0) {
+            if (fmpz_mpoly_pow_ui(m, m, rat->powers[i], ctx) != 1) { assert(0); };
+            rat_mul_fmpz_mpoly_setx(rat, m, 1);
+        } else {
+            if (fmpz_mpoly_pow_ui(m, m, -rat->powers[i], ctx) != 1) { assert(0); };
+            rat_mul_fmpz_mpoly_setx(rat, m, -1);
+        }
     }
     fmpz_mpoly_clear(m, ctx);
 }
