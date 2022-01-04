@@ -4,7 +4,7 @@ Ss{NAME}
     expressions.
 
 Ss{SYNOPSYS}
-    Nm{ratnormal} [Fl{-ndhC}] [Fl{-j} Ar{threads}] Ar{input} [Ar{output}]
+    Nm{ratnormal} [Fl{-mndhC}] [Fl{-j} Ar{threads}] Ar{input} [Ar{output}]
 
 Ss{DESCRIPTION}
 
@@ -29,6 +29,7 @@ Ss{EXAMPLES}
 Ss{OPTIONS}
     Fl{-n}         Allow expanding the final numerator to improve performance.
     Fl{-d}         Allow expanding the final denominator.
+    Fl{-m}         Take the common monomials out of the brackets at the end.
     Fl{-j} Ar{threads} Use this many worker threads, if possible (default: 1).
     Fl{-h}         Show this help message.
     Fl{-C}         Force colored output even if stderr is not a tty.
@@ -525,7 +526,7 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2, bool fnum, bool fden)
     fmpz_mpoly_clear(gcd, ctx);
     fmpz_mpoly_clear(aprime, ctx);
     fmpz_mpoly_clear(bprime, ctx);
-    // Don't forget about numeric factors.
+    // Don't forget about the numeric factors.
     fmpz_t g;
     fmpz_init(g);
     fmpz_gcd(g, fmpq_denref(rat1->numfactor), fmpq_denref(rat2->numfactor));
@@ -577,6 +578,22 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2, bool fnum, bool fden)
     rat_cofactorize(res);
     rat_sort(res);
     logd("Result is %r", res);
+}
+
+void
+rat_take_out_monomials(rat_t rat)
+{
+    fmpz_mpoly_t m;
+    fmpz_mpoly_init(m, ctx);
+    for (ulong i = 0; i < rat->num; i++) {
+        if (fmpz_mpoly_length(&rat->factors[i], ctx) < 2) continue;
+        fmpz_mpoly_term_content(m, &rat->factors[i], ctx);
+        if (fmpz_mpoly_is_one(m, ctx)) continue;
+        if (fmpz_mpoly_divides(&rat->factors[i], &rat->factors[i], m, ctx) != 1) { assert(0); }
+        if (fmpz_mpoly_pow_ui(m, m, rat->powers[i], ctx) != 1) { assert(0); };
+        rat_mul_fmpz_mpoly_setx(rat, m, 1);
+    }
+    fmpz_mpoly_clear(m, ctx);
 }
 
 /* Rational sum
@@ -945,9 +962,10 @@ main(int argc, char *argv[])
     int nthreads = 1;
     bool factor_numerator = false;
     bool factor_denominator = false;
+    bool take_out_monomials = false;
     const char *inputfile = "-";
     const char *outputfile = "-";
-    for (int opt; (opt = getopt(argc, (char*const*)argv, "j:hCVnd")) != -1;) {
+    for (int opt; (opt = getopt(argc, (char*const*)argv, "j:hCVndm")) != -1;) {
         switch (opt) {
         case 'j': nthreads = atoi(optarg); break;
         case 'h': usage(stdout); return 0;
@@ -955,6 +973,7 @@ main(int argc, char *argv[])
         case 'C': COLORS = true; break;
         case 'n': factor_numerator = true; break;
         case 'd': factor_denominator = true; break;
+        case 'm': take_out_monomials = true; break;
         default: return 1;
         }
     }
@@ -980,6 +999,9 @@ main(int argc, char *argv[])
     ratsum_clear(sum);
     rat_sort(rat);
     rat_reverse(rat);
+    if (take_out_monomials) {
+        rat_take_out_monomials(rat);
+    }
     save_output(outputfile, rat);
     rat_clear(rat);
     rat_ctx_clear();
