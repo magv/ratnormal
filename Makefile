@@ -4,7 +4,7 @@ XCXXFLAGS=${CXXFLAGS} \
 
 XCXXFLAGS_STATIC=${XCXXFLAGS} -Os -s -static -pthread
 
-XLDFLAGS=${LDFLAGS} -lflint -lmpfr -lgmp -lginac -lcln
+XLDFLAGS=${LDFLAGS} -lflint -lmpfr -lgmp -lginac -lcln -pthread
 
 XLDFLAGS_STATIC=${XLDFLAGS}
 
