@@ -118,6 +118,8 @@ fmpz_mpoly_ctx_t ctx;
 std::map<std::string, int> variable2index;
 std::vector<std::string> variables;
 const char **variable_names;
+bool factor_numerator = false;
+bool factor_denominator = false;
 #define nvariables (variables.size())
 // }
 
@@ -158,6 +160,22 @@ rat_init(rat_t rat)
     rat->powers = NULL;
     rat->num = 0;
     rat->alloc = 0;
+}
+
+void
+rat_zero(rat_t rat)
+{
+    fmpq_zero(rat->numfactor);
+    for (ulong i = 0; i < rat->num; i++) {
+        fmpz_mpoly_clear(&rat->factors[i], ctx);
+    }
+    rat->num = 0;
+}
+
+bool
+rat_is_zero(rat_t rat)
+{
+    return fmpq_is_zero(rat->numfactor);
 }
 
 void
@@ -232,6 +250,19 @@ rat_mul_fmpq(rat_t rat, const fmpq_t x, const int power)
 }
 
 void
+rat_mul_rat(rat_t rat, const rat_t f)
+{
+    fmpq_mul(rat->numfactor, rat->numfactor, f->numfactor);
+    rat_fit_length(rat, rat->num + f->num);
+    for (ulong i = 0; i < f->num; i++) {
+        fmpz_mpoly_init(&rat->factors[rat->num + i], ctx);
+        fmpz_mpoly_set(&rat->factors[rat->num + i], &f->factors[i], ctx);
+        rat->powers[rat->num + i] = f->powers[i];
+    }
+    rat->num += f->num;
+}
+
+void
 rat_mul_fmpz(rat_t rat, const fmpz_t x, const int power)
 {
     assert(!fmpz_is_zero(x));
@@ -259,6 +290,7 @@ rat_mul_fmpz_mpoly(rat_t rat, const fmpz_mpoly_t poly, int power)
     } else if (fmpz_mpoly_is_fmpz(poly, ctx)) {
         fmpz_t k;
         fmpz_mpoly_get_fmpz(k, poly, ctx);
+        assert(!fmpz_is_zero(k));
         rat_mul_fmpz(rat, k, power);
     } else {
         rat_fit_length(rat, rat->num + 1);
@@ -272,6 +304,7 @@ rat_mul_fmpz_mpoly(rat_t rat, const fmpz_mpoly_t poly, int power)
 void
 rat_mul_fmpz_mpoly_setx(rat_t rat, fmpz_mpoly_t poly, int power)
 {
+    assert(!fmpz_mpoly_is_zero(poly, ctx));
     if (power == 0) {
         return;
     } else if (fmpz_mpoly_is_fmpz(poly, ctx)) {
@@ -367,7 +400,9 @@ rat_max_length(const rat_t rat)
 {
     slong maxlen = 0;
     for (ulong i = 0; i < rat->num; i++) {
-        maxlen = FLINT_MAX(maxlen, fmpz_mpoly_length(&rat->factors[i], ctx));
+        int pow = rat->powers[i];
+        if (pow < 0) pow = -pow;
+        maxlen = FLINT_MAX(maxlen, pow*fmpz_mpoly_length(&rat->factors[i], ctx));
     }
     return maxlen;
 }
@@ -441,21 +476,56 @@ rat_cofactorize(rat_t rat)
 }
 
 void
+poly_reduce_mul(fmpz_mpoly_struct *factors, ulong n)
+{
+    if (n == 0) { return; }
+    for (; n > 1; n--) {
+        // Find two shortest polynomials, multiply them.
+        slong length1 = LONG_MAX, idx1 = -1;
+        slong length2 = LONG_MAX, idx2 = -1;
+        for (ulong i = 0; i < n; i++) {
+            slong length = fmpz_mpoly_length(&factors[i], ctx);
+            if (length < length1) {
+                length2 = length1; idx2 = idx1;
+                length1 = length; idx1 = i;
+            } else if (length < length2) {
+                length2 = length; idx2 = i;
+            }
+        }
+        assert((idx1 >= 0) && (idx2 >= 0) && (idx1 != idx2));
+        logd("Multiplying %p*%p", &factors[idx1], &factors[idx2]);
+        fmpz_mpoly_mul(&factors[idx1], &factors[idx1], &factors[idx2], ctx);
+        fmpz_mpoly_clear(&factors[idx2], ctx);
+        factors[idx2] = factors[n-1];
+    }
+}
+
+void
 rat_expand_numerator(fmpz_mpoly_t poly, const rat_t rat)
 {
-    fmpz_mpoly_t tmp;
-    fmpz_mpoly_init(tmp, ctx);
-    fmpz_mpoly_one(poly, ctx);
+    LOGME;
+    logd("Expanding the numerator of %r", rat);
+    std::vector<fmpz_mpoly_struct> factors;
     for (ulong i = 0; i < rat->num; i++) {
         if (rat->powers[i] <= 0) continue;
+        fmpz_mpoly_t tmp;
+        fmpz_mpoly_init(tmp, ctx);
         if (rat->powers[i] > 1) {
+            logd("Expanding %p^%d", &rat->factors[i], rat->powers[i]);
             fmpz_mpoly_pow_ui(tmp, &rat->factors[i], rat->powers[i], ctx);
-            fmpz_mpoly_mul(poly, poly, tmp, ctx);
         } else {
-            fmpz_mpoly_mul(poly, poly, &rat->factors[i], ctx);
+            fmpz_mpoly_set(tmp, &rat->factors[i], ctx);
         }
+        factors.push_back(*tmp);
     }
-    fmpz_mpoly_clear(tmp, ctx);
+    slong n = factors.size();
+    if (n == 0) {
+        fmpz_mpoly_one(poly, ctx);
+    } else {
+        poly_reduce_mul(&factors[0], factors.size());
+        fmpz_mpoly_clear(poly, ctx);
+        fmpz_mpoly_set(poly, &factors[0], ctx);
+    }
     if (!fmpz_is_one(fmpq_numref(rat->numfactor))) {
         fmpz_mpoly_scalar_mul_fmpz(poly, poly, fmpq_numref(rat->numfactor), ctx);
     }
@@ -464,29 +534,49 @@ rat_expand_numerator(fmpz_mpoly_t poly, const rat_t rat)
 void
 rat_expand_denominator(fmpz_mpoly_t poly, const rat_t rat)
 {
-    fmpz_mpoly_t tmp;
-    fmpz_mpoly_init(tmp, ctx);
-    fmpz_mpoly_one(poly, ctx);
+    LOGME;
+    logd("Expanding the denominator of %r", rat);
+    std::vector<fmpz_mpoly_struct> factors;
     for (ulong i = 0; i < rat->num; i++) {
         if (rat->powers[i] >= 0) continue;
+        fmpz_mpoly_t tmp;
+        fmpz_mpoly_init(tmp, ctx);
         if (rat->powers[i] < -1) {
+            logd("Expanding %p^%d", &rat->factors[i], -rat->powers[i]);
             fmpz_mpoly_pow_ui(tmp, &rat->factors[i], -rat->powers[i], ctx);
-            fmpz_mpoly_mul(poly, poly, tmp, ctx);
         } else {
-            fmpz_mpoly_mul(poly, poly, &rat->factors[i], ctx);
+            fmpz_mpoly_set(tmp, &rat->factors[i], ctx);
         }
+        factors.push_back(*tmp);
     }
-    fmpz_mpoly_clear(tmp, ctx);
+    slong n = factors.size();
+    if (n == 0) {
+        fmpz_mpoly_one(poly, ctx);
+    } else {
+        poly_reduce_mul(&factors[0], factors.size());
+        fmpz_mpoly_clear(poly, ctx);
+        fmpz_mpoly_set(poly, &factors[0], ctx);
+    }
     if (!fmpz_is_one(fmpq_denref(rat->numfactor))) {
         fmpz_mpoly_scalar_mul_fmpz(poly, poly, fmpq_denref(rat->numfactor), ctx);
     }
 }
 
 void
-rat_add_setx(rat_t res, rat_t rat1, rat_t rat2, bool fnum, bool fden)
+rat_add_setx(rat_t res, rat_t rat1, rat_t rat2)
 {
     LOGME;
     logd("Adding %r and %r", rat1, rat2);
+    if (rat_is_zero(rat1)) {
+        rat_clear(res);
+        *res = *rat2;
+        return;
+    }
+    if (rat_is_zero(rat2)) {
+        rat_clear(res);
+        *res = *rat1;
+        return;
+    }
     rat_one(res);
     // First, take out common factors.
     fmpz_mpoly_t gcd, aprime, bprime;
@@ -498,9 +588,9 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2, bool fnum, bool fden)
     #define B (&rat2->factors[j])
     #define Bpower rat2->powers[j]
     for (ulong i = 0; i < rat1->num; i++) {
-        if (Apower >= 0 && fnum) continue;
+        if (Apower >= 0 && factor_numerator) continue;
         for (ulong j = 0; j < rat2->num; j++) {
-            if (Bpower >= 0 && fnum) continue;
+            if (Bpower >= 0 && factor_numerator) continue;
             fmpz_mpoly_gcd_cofactors(gcd, aprime, bprime, A, B, ctx);
             if (fmpz_mpoly_is_one(gcd, ctx)) {
                 continue;
@@ -530,11 +620,13 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2, bool fnum, bool fden)
     fmpz_t g;
     fmpz_init(g);
     fmpz_gcd(g, fmpq_denref(rat1->numfactor), fmpq_denref(rat2->numfactor));
+    assert(!fmpz_is_zero(g));
     fmpq_mul_fmpz(rat1->numfactor, rat1->numfactor, g);
     fmpq_mul_fmpz(rat2->numfactor, rat2->numfactor, g);
     rat_mul_fmpz(res, g, -1);
     fmpz_clear(g);
     logd("Common factor: %r", res);
+    logd("Remaining: %r and %r", rat1, rat2);
     // Then, expand the combined numerator.
     fmpz_mpoly_t anum, aden, bnum, bden;
     fmpz_mpoly_init(anum, ctx);
@@ -542,18 +634,32 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2, bool fnum, bool fden)
     fmpz_mpoly_init(aden, ctx);
     fmpz_mpoly_init(bden, ctx);
     rat_expand_numerator(anum, rat1);
+    assert(!fmpz_mpoly_is_zero(anum, ctx));
     rat_expand_denominator(aden, rat1);
+    assert(!fmpz_mpoly_is_zero(aden, ctx));
     rat_expand_numerator(bnum, rat2);
+    assert(!fmpz_mpoly_is_zero(bnum, ctx));
     rat_expand_denominator(bden, rat2);
+    assert(!fmpz_mpoly_is_zero(bden, ctx));
     logd("Computing %p*%p + %p*%p", anum, bden, bnum, aden);
     fmpz_mpoly_mul(anum, anum, bden, ctx);
     fmpz_mpoly_mul(bnum, bnum, aden, ctx);
     fmpz_mpoly_add(anum, anum, bnum, ctx);
+    if (fmpz_mpoly_is_zero(anum, ctx)) {
+        rat_zero(res);
+        fmpz_mpoly_clear(anum, ctx);
+        fmpz_mpoly_clear(bnum, ctx);
+        rat_clear(rat1);
+        rat_clear(rat2);
+        fmpz_mpoly_clear(aden, ctx);
+        fmpz_mpoly_clear(bden, ctx);
+        return;
+    }
     rat_mul_fmpz_mpoly_setx(res, anum, 1);
     fmpz_mpoly_clear(anum, ctx);
     fmpz_mpoly_clear(bnum, ctx);
     // Finally, multiply by the combined denominator.
-    if (!fden) {
+    if (!factor_denominator) {
         for (ulong i = 0; i < rat1->num; i++) {
             if (Apower >= 0) continue;
             rat_mul_fmpz_mpoly_setx(res, A, Apower);
@@ -581,6 +687,45 @@ rat_add_setx(rat_t res, rat_t rat1, rat_t rat2, bool fnum, bool fden)
 }
 
 void
+rat_sqrt(rat_t rat)
+{
+    LOGME;
+    logd("Sqrt of %r", rat);
+    rat_cofactorize(rat);
+    bool minus = false;
+    if (fmpq_sgn(rat->numfactor) < 0) {
+        minus = !minus;
+        fmpq_neg(rat->numfactor, rat->numfactor);
+    }
+    fmpz_sqrt(fmpq_numref(rat->numfactor), fmpq_numref(rat->numfactor));
+    fmpz_sqrt(fmpq_denref(rat->numfactor), fmpq_denref(rat->numfactor));
+    fmpz_mpoly_t root;
+    fmpz_mpoly_init(root, ctx);
+    for (ulong i = 0; i < rat->num; i++) {
+        int n = rat->powers[i];
+        if ((n & 1) == 0) {
+            rat->powers[i] = n / 2;
+        } else {
+            logd("Sqrt of %p", &rat->factors[i]);
+            if (!fmpz_mpoly_sqrt(root, &rat->factors[i], ctx)) {
+                minus = !minus;
+                fmpz_mpoly_neg(&rat->factors[i], &rat->factors[i], ctx);
+                if (!fmpz_mpoly_sqrt(root, &rat->factors[i], ctx)) {
+                    fprintf(stderr, "ratnormal: sqrt() of a non-square\n");
+                    exit(1);
+                }
+            }
+            fmpz_mpoly_swap(root, &rat->factors[i], ctx);
+        }
+    }
+    fmpz_mpoly_clear(root, ctx);
+    if (minus) {
+        fprintf(stderr, "ratnormal: sqrt() of a negative number\n");
+        exit(1);
+    }
+}
+
+void
 rat_take_out_monomials(rat_t rat)
 {
     fmpz_mpoly_t m;
@@ -601,86 +746,16 @@ rat_take_out_monomials(rat_t rat)
     fmpz_mpoly_clear(m, ctx);
 }
 
-/* Rational sum
- */
-
-typedef struct {
-    rat_struct *terms;
-    ulong num;
-    ulong alloc;
-} ratsum_struct;
-
-typedef ratsum_struct ratsum_t[1];
-
 void
-ratsum_init(ratsum_t sum)
-{
-    sum->terms = NULL;
-    sum->num = 0;
-    sum->alloc = 0;
-}
-
-void
-ratsum_zero(ratsum_t sum)
-{
-    for (ulong i = 0; i < sum->num; i++) {
-        rat_clear(&sum->terms[i]);
-    }
-    sum->num = 0;
-}
-
-void
-ratsum_fit_length(ratsum_t sum, ulong len)
-{
-    if (sum->alloc < len) {
-        len = FLINT_MAX(len, sum->alloc + sum->alloc/2);
-        sum->terms = (rat_struct*)flint_realloc(sum->terms, len*sizeof(sum->terms[0]));
-        sum->alloc = len;
-    }
-}
-
-void
-ratsum_clear(ratsum_t sum)
-{
-    for (ulong i = 0; i < sum->num; i++) {
-        rat_clear(&sum->terms[i]);
-    }
-    flint_free(sum->terms);
-    sum->terms = NULL;
-    sum->num = 0;
-    sum->alloc = 0;
-}
-
-void
-ratsum_fprint(FILE *f, const ratsum_t sum)
-{
-    fprintf(f, "(\n ");
-    for (ulong i = 0; i < sum->num; i++) {
-        if (i != 0) fprintf(f, " +\n ");
-        rat_fprint(f, &sum->terms[i]);
-    }
-    fprintf(f, "\n)");
-}
-
-void
-ratsum_add_rat_setx(ratsum_t sum, rat_t rat)
-{
-    ratsum_fit_length(sum, sum->num+1);
-    rat_init(&sum->terms[sum->num]);
-    rat_swap(&sum->terms[sum->num], rat);
-    sum->num++;
-}
-
-void
-ratsum_sum_setx(rat_t rat, ratsum_t sum, bool fnum, bool fden)
+rat_reduce_add(rat_struct *rats, ulong n)
 {
     LOGME;
-    for (ulong n = 0; n < sum->num-1; n++) {
+    for (; n > 1; n--) {
         // Find two shortest rationals, add them.
         slong length1 = LONG_MAX, idx1 = -1;
         slong length2 = LONG_MAX, idx2 = -1;
-        for (ulong i = 0; i < sum->num - n; i++) {
-            slong length = rat_max_length(&sum->terms[i]);
+        for (ulong i = 0; i < n; i++) {
+            slong length = rat_max_length(&rats[i]);
             if (length < length1) {
                 length2 = length1; idx2 = idx1;
                 length1 = length; idx1 = i;
@@ -692,12 +767,13 @@ ratsum_sum_setx(rat_t rat, ratsum_t sum, bool fnum, bool fden)
             }
         }
         assert((idx1 >= 0) && (idx2 >= 0) && (idx1 != idx2));
-        logd("Adding pair %ld of %ld", n+1, sum->num-1);
-        rat_add_setx(rat, &sum->terms[idx1], &sum->terms[idx2], fnum, fden);
-        rat_swap(&sum->terms[idx1], rat);
-        rat_swap(&sum->terms[idx2], &sum->terms[sum->num - n - 1]);
+        logd("Adding %r and %r (todo: %lu)", &rats[idx1], &rats[idx2], n-2);
+        rat_t rat;
+        rat_init(rat);
+        rat_add_setx(rat, &rats[idx1], &rats[idx2]);
+        rat_swap(&rats[idx1], rat);
+        rat_swap(&rats[idx2], &rats[n-1]);
     }
-    rat_swap(&sum->terms[0], rat);
 }
 
 /* GiNaC conversion
@@ -754,8 +830,10 @@ fmpq_of_ginac(fmpq_t x, const GiNaC::numeric &n)
     fmpq_set_si(x, num.to_long(), den.to_long());
 }
 
+void rat_of_ginac(rat_t rat, const GiNaC::ex &expr);
+
 void
-rat_of_ginac(rat_t rat, const GiNaC::ex &expr)
+oldrat_of_ginac(rat_t rat, const GiNaC::ex &expr)
 {
     LOGME;
     rat_one(rat);
@@ -808,22 +886,6 @@ rat_of_ginac(rat_t rat, const GiNaC::ex &expr)
     });
 }
 
-void
-ratsum_of_ginac(ratsum_t sum, const GiNaC::ex &expr)
-{
-    ratsum_zero(sum);
-    term_iter(expr, [&](const GiNaC::ex &term) {
-        rat_t rat;
-        rat_init(rat);
-        rat_of_ginac(rat, term);
-        rat_sort(rat);
-        rat_cofactorize(rat);
-        rat_sort(rat);
-        ratsum_add_rat_setx(sum, rat);
-        rat_clear(rat);
-    });
-}
-
 /* Main
  */
 
@@ -870,18 +932,25 @@ print_rat_short(FILE *f, const struct printf_info *info, const void *const *args
     return 1;
 }
 
-int
-print_ratsum(FILE *f, const struct printf_info *info, const void *const *args)
-{
-    ratsum_fprint(f, **((const ratsum_t **)(args[0])));
-    return 1;
-}
+// GiNaC will crash if these functions are not aligned...
+static __attribute__((aligned(8))) GiNaC::ex
+sqrt_reader(const GiNaC::exvector& ev)
+{ return GiNaC::sqrt(ev[0]); }
+
+static __attribute__((aligned(8))) GiNaC::ex
+power_reader(const GiNaC::exvector& ev)
+{ return GiNaC::power(ev[0], ev[1]); }
 
 GiNaC::ex
 load_input(const char *filename)
 {
     LOGME;
-    GiNaC::parser reader;
+    GiNaC::prototype_table proto = GiNaC::prototype_table();
+    proto[std::make_pair("Sqrt", 1)] = sqrt_reader;
+    proto[std::make_pair("sqrt", 1)] = sqrt_reader;
+    proto[std::make_pair("Power", 2)] = power_reader;
+    proto[std::make_pair("pow", 2)] = power_reader;
+    GiNaC::parser reader(GiNaC::symtab(), false, proto);
     GiNaC::ex expr;
     if (strcmp(filename, "-") != 0) {
         std::ifstream ifs(filename);
@@ -955,6 +1024,91 @@ usage(FILE *f)
     fputs(p, f);
 }
 
+void
+rat_pow(rat_t rat, int pow)
+{
+    fmpq_pow_si(rat->numfactor, rat->numfactor, pow);
+    for (ulong i = 0; i < rat->num; i++) {
+        rat->powers[i] *= pow;
+    }
+}
+
+void
+rat_of_ginac(rat_t rat, const GiNaC::ex &expr)
+{
+    //LOGME;
+    if (GiNaC::is_a<GiNaC::add>(expr)) {
+        size_t n = expr.nops();
+        assert(n > 0);
+        std::vector<rat_struct> rats;
+        rats.resize(n);
+        rats[0] = *rat;
+        for (size_t i = 0; i < n; i++) {
+            if (i) rat_init(&rats[i]);
+            rat_of_ginac(&rats[i], expr.op(i));
+        }
+        if (n > 1) rat_reduce_add(&rats[0], n);
+        *rat = rats[0];
+        return;
+    }
+    if (GiNaC::is_a<GiNaC::mul>(expr)) {
+        size_t n = expr.nops();
+        assert(n > 0);
+        rat_t f;
+        rat_init(f);
+        rat_one(rat);
+        for (size_t i = 0; i < n; i++) {
+            rat_of_ginac(f, expr.op(i));
+            rat_mul_rat(rat, f);
+        }
+        return;
+    }
+    if (GiNaC::is_a<GiNaC::numeric>(expr)) {
+        GiNaC::numeric num = GiNaC::ex_to<GiNaC::numeric>(expr);
+        rat_one(rat);
+        fmpq_of_ginac(rat->numfactor, num);
+        return;
+    }
+    if (GiNaC::is_a<GiNaC::symbol>(expr)) {
+        fmpz_t coef;
+        fmpz_init_set_ui(coef, 1);
+        std::vector<ulong> exp(nvariables, 0);
+        GiNaC::symbol sym = GiNaC::ex_to<GiNaC::symbol>(expr);
+        int varidx = variable2index[sym.get_name()];
+        exp[varidx] = 1;
+        fmpz_mpoly_t poly;
+        fmpz_mpoly_init(poly, ctx);
+        fmpz_mpoly_push_term_fmpz_ui(poly, coef, &exp[0], ctx);
+        fmpz_clear(coef);
+        rat_one(rat);
+        rat_mul_fmpz_mpoly_setx(rat, poly, 1);
+        fmpz_mpoly_clear(poly, ctx);
+        return;
+    }
+    if (GiNaC::is_a<GiNaC::power>(expr)) {
+        GiNaC::numeric pow = GiNaC::ex_to<GiNaC::numeric>(expr.op(1));
+        if (pow.is_integer()) {
+            rat_of_ginac(rat, expr.op(0));
+            rat_pow(rat, pow.to_int());
+        } else {
+            GiNaC::numeric num = pow.numer();
+            GiNaC::numeric den = pow.denom();
+            if (den == 2) {
+                rat_of_ginac(rat, expr.op(0));
+                rat_pow(rat, num.to_int());
+                rat_sqrt(rat);
+            } else {
+                fprintf(stderr, "ratnormal: unsupported fractional exponent\n");
+                exit(1);
+            }
+        }
+        return;
+    }
+    fprintf(stderr, "ratnormal: unsupported expression type\n");
+    std::cerr << expr;
+    exit(1);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -963,14 +1117,11 @@ main(int argc, char *argv[])
     register_printf_function('p', print_poly_short, print_ptr_arginfo);
     register_printf_function('R', print_rat, print_ptr_arginfo);
     register_printf_function('r', print_rat_short, print_ptr_arginfo);
-    register_printf_function('S', print_ratsum, print_ptr_arginfo);
     int nthreads = 1;
-    bool factor_numerator = false;
-    bool factor_denominator = false;
     bool take_out_monomials = false;
     const char *inputfile = "-";
     const char *outputfile = "-";
-    for (int opt; (opt = getopt(argc, (char*const*)argv, "j:hCVndm")) != -1;) {
+    for (int opt; (opt = getopt(argc, (char*const*)argv, "j:hCVndmS")) != -1;) {
         switch (opt) {
         case 'j': nthreads = atoi(optarg); break;
         case 'h': usage(stdout); return 0;
@@ -995,13 +1146,9 @@ main(int argc, char *argv[])
     }
     flint_set_num_threads(nthreads);
     GiNaC::ex expr = load_input(inputfile);
-    ratsum_t sum;
-    ratsum_init(sum);
-    ratsum_of_ginac(sum, expr);
     rat_t rat;
     rat_init(rat);
-    ratsum_sum_setx(rat, sum, factor_numerator, factor_denominator);
-    ratsum_clear(sum);
+    rat_of_ginac(rat, expr);
     rat_sort(rat);
     rat_reverse(rat);
     if (take_out_monomials) {
@@ -1010,5 +1157,6 @@ main(int argc, char *argv[])
     save_output(outputfile, rat);
     rat_clear(rat);
     rat_ctx_clear();
+
     return 0;
 }
